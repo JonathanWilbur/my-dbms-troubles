@@ -212,14 +212,61 @@ In the end, it turns out that Azure uses MariaDB version `10.2.22-MariaDB-log (M
 
 In case you're curious, this experiment to simply connect my DBeaver client to a MariaDB database on Azure cost me about 12 hours of my life.
 
+## Corrupt Data from EODData.com
+
+After several months of my patience running thin, I tried to do _something_ useful with my DBMS work. I had saved up a sizeable sum of money, and I was worried that a downturn in the stock market may be imminent. In hindsight, I cannot say I was right, per se, but the upward trend had ceased, and the stock market stagnated for a while. To proactively take advantage of the opportunity, I sought to upload and analyze end-of-day stock pricing data so that I could identify which assets fared well during the 2007-2009 financial crisis. Fearing a large attack on U.S. soil in the near future (which has not happened, but I think it will happen around March of 2020), I also researched what fared well during and after the 9/11 attacks.
+
+The cheapest and most readily available option came from a website called eoddata.com. For only $50, I could have all the data I would need, which would be a bargain price for the insight I knew I would gain.
+
+After struggling through the tedium of ETL, I managed to get this data on a MariaDB instance on Azure. My first analysis was just a simple query of what stocks went up from the start to the end of these cataclysmic events. One of the first results--the biggest winners--of the 2007 financial crisis, according to my data was Revlon, the cosmetics brand. The absurdity of an elastic consumer good faring well during a financial crisis was immediately outrageous. Upon checking my data against Yahoo! Finance, I discovered that data in my database was incorrect. In disbelief and outrage, I searched for similar complaints to find [this StackExchange question](https://quant.stackexchange.com/questions/3284/is-eoddata-a-good-data-source), yielding many experiences adverse to their product, one of which reads "There are hundreds and hundreds of incorrectly missing or completely wrong prices."
+
+After giving up frustrated that night, I returned to it the next day. With my optimism and proactivity restored by a night's rest, I realized that I could just perform most of my analyses, and simply double check the results against Yahoo! Finance. In spite of missing or incorrect prices, this data could still be used to identify diamonds in the rough.
+
+## PreQL Complete
+
+After months of intense work, I finally finished and published [PreQL](https://github.com/JonathanWilbur/preql). Since I started several months before, it had gone through two complete re-writes. It was a miserable experience, since throughout the whole experiment, I neither knew whether the project would be worth it in the end, nor could I give up at the expense of the sunken cost of so much effort already put into it. When I finally released version 1.0.0, it had:
+
+- A Kubernetes-like API, meaning that all configuration states looked like Kubernetes resources, having `apiVersion`, `metadata`, `kind`, and `spec` fields at the root.
+- A data-based system of data types, rather than hard-coded data types.
+  - This roughly took on the form of a simple map. (e.g. A `uint8` in PreQL is a `TINYINT UNSIGNED` in MariaDB.)
+- Been tested by being converted to MariaDB, OpenLDAP, and BSON Schema targets successfully, so that I could confirm its usefulness in a wide variety of DDL.
+
+ and after a week of additional work, I wrote an Azure Function to use it to push changes to a database. I was pleased with the results, but the real value of using it has yet to be seen, as the benefit of PreQL is not in initially setting up a database on it--in fact, initial use is actually pretty difficult--but in the ongoing maintenance of a database.
+
+However, actually using it in the field gives me hesitations about its practicality. Configuration Management is not quite as practical as I had hoped for relational databases, because it would be a bad practice to automatically delete data. For example, though PreQL is intended to declaratively configure the columns of a table, if the data type of a column changed, PreQL would not delete that column and re-create it with the new desired type, as that would delete data. This hard-coded non-deletion is an intentional feature of PreQL, but it comes at the cost of proper configuration management; as for now, PreQL can only add to the state of a database.
+
+Another huge problem is in actually getting the schema off of GitHub. As my first test of PreQL in the field, I created a private GitHub repository containing the PreQL schema for a database. Then I supplied the URL to the file to Azure only to find that the URL query token required to access a file from a private repository's file changes every minute or so, meaning that I either had to make my schema entirely public, or use the GitHub API somehow to nab specific versions of a file from a repository, both being undesirable. In the long run, I think creating a GitHub Action, Azure Pipeline, Jenkins job, or something else to upload the most up-to-date schema to an object store with an unguessable URL may fix my issue in a suitable manner, but for now, this behavior remains an obstacle to its usage.
+
+The Azure Function I wrote connects to the DBMS and runs the necessary commands to bring it up to the desired state. I don't like the idea of having one central function to which all PreQL clientele must send their plaintext administrative credentials to their databases for obvious reasons. Though the function does not save these credentials, I would have to convince my future customers of that, and that's not a good look. Along these lines, I envision the deployment of PreQL "sidecars" in a Kubernetes-based environment to actively fetch configuration updates, which seems like a pretty great use case, and which somewhat absolves me of the security responsibility.
+
+## A Lesson Learned about ETL
+
+Once again getting frustrated with how long it has been since I got any use from my database, which was costing me about $30 per month, by the way, I uploaded some more data to it, the nature of which is confidential. The process, as with everything else in this story, was obnoxious, in this case, because the upload would only progress so far before encountering a row of data that did not fit my schema. In particular, dates were not formatted in a way that DataGrip (which I was using for ETL) could translate to native date types. Out of this frustration, I learned a very valuable lesson about ETL: upload to a temporary table (or use temporary columns) having very generous schema, then perform your transformations within the database itself. In my case, I uploaded those quarrelsome dates to a `VARCHAR` column, then used MariaDB's `STR_TO_DATE` function to move them over to the desired column, then delete the `VARCHAR` column. This was remarkably successful, and this lesson was worth all of the suffering it took to learn it.
+
+## Enter Serverless SQL Server
+
+A month after this, an outage on my father's website prompted me to re-write it entirely. Since I first wrote it, my web development skills had improved sevenfold, and I knew I could quickly create a technologically-sophisticated website that would knock his socks off for Father's Day. I discovered, to my delight, that Azure had released a new serverless SQL server, and its price was unbeatable for this particular low-volume use case. After having used it, I cannot stress enough how awesome Serverless SQL Server on Azure is. I had spent $30 a month for my MariaDB server, which sat idle most of the time. On the other hand, I could have spent just $5 a month for a Serverless SQL Server instance, had it been around when I started this project. Further, as I learned more and more about relational databases, I have come to appreciate some of the features of SQL Server that were just too out of my league when I started. A novice to DBMSs just sees the tedious syntax of T-SQL and winces away without understanding the value of indexed views and the extreme control over joining that SQL Server offers, among other state-of-the-art features.
+
+Despite finally updating MariaDB to 10.2.25, and therefore fixing the DDL export bug mentioned earlier, Serverless SQL Server on Azure now sounded like the obvious choice... until a co-worker recommended an article to me that would convince me against the use of relational databases entirely.
+
+## The Vietnam of Computer Science
+
+At the recommendation of an architecture co-worker, I read the somewhat famous article [The Vietnam of Computer Science](http://blogs.tedneward.com/post/the-vietnam-of-computer-science/) by Ted Neward. I won't restate everything he says, but I highly recommend reading it. The gist is that relational databases do not map gracefully to objects in memory, even when using an Object-Relational Mapping (ORM). Relational databases require you to:
+
+1. Duplicate your schema in code.
+2. Use expensive logic to join tables representing an increasingly complex inheritance hierarchy in code.
+3. Fetch everything all at once, or make tons of round trips.
+
+Notably, a lot of his critiques turn the advantages of relational databases that I had named at the beginning of this document on their heads. For my purposes, reading it has convinced me that using relational databases at all should be avoided, if possible. For now, the only advantage I can see of relational databases is how widely they are supported in comparison to the document-oriented databases, particularly when it comes to analytics tools. On the other hand, it is increasingly easier to create websites and dashboards, using composable front-end web frameworks such as React, so this advantage is of diminishing importance.
+
 ## My Experience with General-Purpose Editors
 
 Below are the details of my experience with various RDBMS GUI clients. My current recommendation for graphical clients is this:
 
 * If you are using Microsoft SQL Server, use SSMS or Azure Data Studio.
 * If you are using anything else, use the following:
-  * DataGrip on a large workstation (if the $90 price tag is worth it)
-  * DBeaver on resource-constrained workstations, such as laptops.
+  * DataGrip if you are willing to pay $90. (This buys it for all of your devices, not just one.)
+  * DBeaver if you are not willing to pay.
 
 ### MySQL Workbench
 
@@ -252,6 +299,17 @@ Don't let DBeaver's website fool you: it is actually a very well-functioning dat
 DataGrip is complex and kind of annoying to set up, but it is loaded with features. It is almost overwhelming. It truly feels like a "studio" rather than just a viewer / editor. Once you get used to it, you can feel the power. It is also unambiguously the most beautiful studio I have seen so far, and it includes a dark theme. It is reasonably cheap, but I don't know that it would be worth it to buy it, since DBeaver is already perfectly fine for my purposes.
 
 CSV imports are exceptionally capable, with the exception of this one issue: [lines over 5000 characters cause the import to fail](https://youtrack.jetbrains.com/issue/DBE-7199). I don't know for sure, but if they are using fixed-length buffers to store variable text, it's a problem, and indicative of further problems I may experience down the line. This single issue converted by confident purchase into hesitation.
+
+
+
+## Lessons Learned and Decisions Made
+
+- Use UUIDs to identify objects in your DBMS to the outside world. Do not expose their internal primary keys, row IDs, object identifiers, et cetera, per [this article](https://tomharrisonjr.com/uuid-or-guid-as-primary-keys-be-careful-7b2aa3dcb439).
+- Do not use Relational Databases, per [this article](http://blogs.tedneward.com/post/the-vietnam-of-computer-science/).
+  - Especially do not use Postgres, per [this article](https://eng.uber.com/mysql-migration/).
+- Use DataGrip for the "load," and the database's native capabilities for your "transform."
+
+
 
 ## Appendix A: Root Certificates
 
